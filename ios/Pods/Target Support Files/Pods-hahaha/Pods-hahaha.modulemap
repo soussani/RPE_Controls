@@ -1,0 +1,6 @@
+module Pods_hahaha {
+  umbrella header "Pods-hahaha-umbrella.h"
+
+  export *
+  module * { export * }
+}

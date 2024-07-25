@@ -1,0 +1,6 @@
+module Pods_hahaha_hahahaTests {
+  umbrella header "Pods-hahaha-hahahaTests-umbrella.h"
+
+  export *
+  module * { export * }
+}
