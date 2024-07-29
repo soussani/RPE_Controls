@@ -12,8 +12,7 @@ import {
   Platform,
 } from 'react-native';
 import { BleManager } from 'react-native-ble-plx';
-import { Buffer } from 'buffer'
-import { fromByteArray, toByteArray } from 'base64-js';
+import { Buffer } from 'buffer';
 
 const manager = new BleManager();
 
@@ -27,7 +26,8 @@ const BleTerminal = () => {
   const [characteristicUUID] = useState('0000FF01-0000-1000-8000-00805f9b34fb');
   const [incomingMessages, setIncomingMessages] = useState([]);
   const [scanning, setScanning] = useState(false);
-  const [ipAddress, setIpAddress] = useState('')
+  const [ipAddress, setIpAddress] = useState('');
+  const [wifiResponse, setWifiResponse] = useState('');
 
   useEffect(() => {
     return () => {
@@ -35,18 +35,15 @@ const BleTerminal = () => {
     };
   }, []);
 
+  useEffect(() => {
+    if (connectedDevice) {
+      const interval = setInterval(() => {
+        getAndSetIpAddress();
+      }, 1000); // Adjust the interval as needed
 
-  const encodeMessage = (message) => {
-    const buffer = Buffer.from(message, 'utf-8');
-    return buffer.toString('base64');
-  };
-  
-  // Decode a Base64 string
-  const decodeMessage = (base64String) => {
-    const buffer = Buffer.from(base64String, 'base64');
-    return buffer.toString('utf-8');
-  };
-
+      return () => clearInterval(interval);
+    }
+  }, [connectedDevice]);
 
   const scanForDevices = async () => {
     if (scanning) return;
@@ -105,17 +102,15 @@ const BleTerminal = () => {
         throw new Error('Characteristic not found');
       }
   
-      characteristic.monitor((error, char) => {
+      characteristic.monitor(async (error, char) => {
         if (error) {
-          console.error('Notification error:', error);
           return;
         }
         if (char.value) {
           const bytes = Buffer.from(char.value, 'base64');
           const message = bytes.toString('utf-8');
-          setIncomingMessages((prevMessages) => [...prevMessages, message]);
-          console.log('Notification received:', message);
-          setIpAddress(message)
+          setIncomingMessages(message)
+          console.log('Incoming: ', message);
         }
       });
   
@@ -126,24 +121,68 @@ const BleTerminal = () => {
       setModalVisible(true);
     }
   };
+  
+  useEffect(() => {
+    if (incomingMessages) {
+      try {
+        const msg = JSON.parse(incomingMessages); // Clean up the message
+        if (msg.IP) {
+          const ip = convertHexToIPv4(msg.IP);
+          setIpAddress(ip);
+        }
+      } catch (error) {
+        console.log(error);
+      }
+    }
+  }, [incomingMessages]);
+  
 
-  const sendMessage = async () => {
+  const getAndSetIpAddress = async () => {
     if (connectedDevice) {
       try {
-        const messageArray = Buffer.from(message, 'utf-8');
+        const ipreq = '{"request":"get_ip"}'
+        const messageArray = Buffer.from(ipreq, 'utf-8');
         const messageEncoded = messageArray.toString('base64');
         await connectedDevice.writeCharacteristicWithResponseForService(
           serviceUUID,
           characteristicUUID,
           messageEncoded
         );
-        setMessage('');
-        console.log('Message sent:', message);
+
       } catch (error) {
         console.error('Failed to send message:', error);
         setConnectionStatus(`Failed to send message: ${error.message}`);
         setModalVisible(true);
       }
+    }
+  };
+
+  const sendWiFiRequest = async () => {
+    if (!ipAddress) {
+      console.error('IP address is empty');
+      return;
+    }
+
+    try {
+      const response = await fetch(`http://${ipAddress}/`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'text/plain',
+        },
+        body: message,
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! Status: ${response.status}`);
+      }
+
+      const data = await response.text();
+      console.log('WiFi request response:', data);
+      setWifiResponse(data); // Update state with the WiFi response
+    } catch (error) {
+      console.error('Failed to send WiFi request:', error);
+      setConnectionStatus(`Failed to send WiFi request: ${error.message}`);
+      setModalVisible(true);
     }
   };
 
@@ -163,6 +202,23 @@ const BleTerminal = () => {
     }
   };
 
+  const convertHexToIPv4 = (hex) => {
+    if (hex.startsWith('0x')) {
+      hex = hex.slice(2);
+    }
+
+    hex = hex.padStart(8, '0');
+
+    const parts = [
+      parseInt(hex.slice(0, 2), 16),
+      parseInt(hex.slice(2, 4), 16),
+      parseInt(hex.slice(4, 6), 16),
+      parseInt(hex.slice(6, 8), 16),
+    ];
+
+    return parts.join('.');
+  };
+
   const startScan = async () => {
     if (connectedDevice) {
       disconnectDevice();
@@ -177,7 +233,7 @@ const BleTerminal = () => {
       style={styles.container}
     >
       <View style={styles.container}>
-        <Text style={styles.title}>BLE Terminal</Text>
+        <Text style={styles.title}> RPE Controls</Text>
         <TouchableOpacity style={styles.deviceButton} onPress={startScan}>
           <Text style={styles.deviceName}>Scan</Text>
         </TouchableOpacity>
@@ -197,22 +253,23 @@ const BleTerminal = () => {
           <View style={styles.deviceInfo}>
             <Text style={styles.deviceName}>Connected to: {connectedDevice.name || connectedDevice.id}</Text>
             <Text style={styles.infoText}>Responses:</Text>
-            {incomingMessages.map((msg, index) => (
-              <Text key={index} style={styles.incomingMessage}>{msg}</Text>
-            ))}
+            <Text>{ipAddress}</Text>
           </View>
         )}
 
         {connectedDevice && (
-          <View style={styles.inputContainer}>
+          <View style={styles.inputWrapper}>
+            {/* <Button title="Get IP and Send" onPress={getAndSetIpAddress} /> */}
             <TextInput
               style={styles.input}
               placeholder="Type your message"
               value={message}
               onChangeText={setMessage}
             />
-            <Button title="Send" onPress={sendMessage} />
-            <Button title="Disconnect" onPress={disconnectDevice} color="red" />
+            <View style={styles.buttonContainer}>
+              <Button title="Send WiFi" onPress={sendWiFiRequest} />
+              <Button title="Disconnect" onPress={disconnectDevice} color="red" />
+            </View>
           </View>
         )}
 
@@ -230,6 +287,14 @@ const BleTerminal = () => {
             </View>
           </View>
         </Modal>
+
+        {/* Display WiFi Response */}
+        {wifiResponse && connectedDevice ? (
+          <View style={styles.wifiResponseContainer}>
+            <Text style={styles.wifiResponseTitle}>WiFi Response:</Text>
+            <Text>{wifiResponse}</Text>
+          </View>
+        ) : null}
       </View>
     </KeyboardAvoidingView>
   );
@@ -238,74 +303,77 @@ const BleTerminal = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    padding: 16,
-    justifyContent: 'center',
-    backgroundColor: '#f8f9fa',
+    justifyContent: 'flex-start',
+    alignItems: 'center',
+    padding: 20,
   },
   title: {
-    fontSize: 28,
-    marginBottom: 20,
-    textAlign: 'center',
+    fontSize: 24,
     fontWeight: 'bold',
+    marginBottom: 20,
   },
   deviceList: {
-    flexGrow: 1,
-    justifyContent: 'center',
+    width: '100%',
   },
   deviceButton: {
     padding: 15,
+    borderRadius: 10,
+    backgroundColor: '#f0f0f0',
     marginVertical: 5,
-    backgroundColor: '#007bff',
-    borderRadius: 5,
+    width: '100%',
   },
   deviceName: {
-    color: '#fff',
     fontSize: 18,
-    textAlign: 'center',
   },
   deviceInfo: {
     marginVertical: 20,
     alignItems: 'center',
   },
-  infoText: {
-    fontSize: 16,
-    marginVertical: 2,
-  },
-  incomingMessage: {
-    fontSize: 14,
-    marginVertical: 2,
-    color: 'green',
-  },
-  inputContainer: {
+  inputWrapper: {
+    width: '100%',
     marginTop: 20,
-    alignItems: 'center',
   },
   input: {
-    height: 40,
-    borderColor: 'gray',
     borderWidth: 1,
+    borderColor: '#ccc',
+    borderRadius: 10,
+    padding: 10,
     marginBottom: 10,
-    paddingHorizontal: 10,
-    width: '80%',
-    borderRadius: 5,
+    width: '100%',
+  },
+  buttonContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
   },
   modalContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    backgroundColor: 'rgba(0,0,0,0.5)',
   },
   modalView: {
-    width: '80%',
-    padding: 20,
     backgroundColor: 'white',
     borderRadius: 10,
-    elevation: 5,
+    padding: 20,
+    alignItems: 'center',
   },
   modalText: {
     marginBottom: 15,
     textAlign: 'center',
-    fontSize: 18,
+  },
+  infoText: {
+    marginTop: 20,
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  wifiResponseContainer: {
+    marginTop: 20,
+    alignItems: 'center',
+  },
+  wifiResponseTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
   },
 });
 
